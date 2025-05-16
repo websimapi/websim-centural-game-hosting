@@ -66,7 +66,8 @@ const config = {
     socket: {
         url: 'https://centural.websim.ai',
         reconnectInterval: 5000, // 5 seconds
-        adminKey: null
+        adminKey: null,
+        username: null // User identity for credit tracking
     },
     // Check settings
     monitoring: {
@@ -76,7 +77,13 @@ const config = {
     // File paths
     paths: {
         configFile: path.join(__dirname, 'config.json'),
-        adminKeyFile: path.join(__dirname, '.adminkey')
+        adminKeyFile: path.join(__dirname, '.adminkey'),
+        userFile: path.join(__dirname, '.userinfo')
+    },
+    // Credits tracking
+    credits: {
+        enabled: true,
+        trackVerifications: true
     }
 };
 
@@ -157,6 +164,37 @@ const saveAdminKey = (key) => {
     }
 };
 
+// Helper function to load user info from file
+const loadUserInfo = () => {
+    try {
+        if (fs.existsSync(config.paths.userFile)) {
+            config.socket.username = fs.readFileSync(
+                config.paths.userFile, 
+                'utf8'
+            ).trim();
+            logger.info('User info loaded: ' + config.socket.username);
+            return true;
+        }
+        return false;
+    } catch (error) {
+        logger.error('Failed to load user info: ' + error.message);
+        return false;
+    }
+};
+
+// Helper function to save user info to file
+const saveUserInfo = (username) => {
+    try {
+        fs.writeFileSync(config.paths.userFile, username);
+        config.socket.username = username;
+        logger.info('User info saved: ' + username);
+        return true;
+    } catch (error) {
+        logger.error('Failed to save user info: ' + error.message);
+        return false;
+    }
+};
+
 // Initialize socket connection
 let socket = null;
 
@@ -233,6 +271,8 @@ const sendStatusUpdate = () => {
         socket.emit('server-status-update', {
             updates: state.serverStatus,
             adminKey: config.socket.adminKey,
+            username: config.socket.username, // Include username for credit tracking
+            isAuthenticated: true,
             timestamp: new Date().toISOString()
         });
         
@@ -446,10 +486,25 @@ program
     .command('start')
     .description('Start monitoring servers')
     .option('-n, --no-auto-connect', 'Do not automatically connect to WebSocket server')
-    .action((options) => {
+    .action(async (options) => {
         displayHeader();
         loadConfig();
         loadAdminKey();
+        loadUserInfo();
+        
+        // If no username is set, prompt for it
+        if (!config.socket.username) {
+            const userAnswer = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'username',
+                    message: 'Enter your username (for credit tracking):',
+                    validate: value => value.trim().length > 0 ? true : 'Please enter a valid username'
+                }
+            ]);
+            
+            saveUserInfo(userAnswer.username.trim());
+        }
         
         if (options.autoConnect === false) {
             console.log(chalk.yellow('Auto-connect is disabled. Will not connect to WebSocket server.'));
@@ -460,6 +515,7 @@ program
         startMonitoring();
         
         console.log(chalk.green('\nMonitoring started. Press Ctrl+C to exit.'));
+        console.log(chalk.cyan(`\nEarning credits as: ${config.socket.username}`));
     });
 
 program
@@ -493,6 +549,7 @@ program
         displayHeader();
         loadConfig();
         loadAdminKey();
+        loadUserInfo();
         
         const answers = await inquirer.prompt([
             {
@@ -510,6 +567,19 @@ program
             },
             {
                 type: 'input',
+                name: 'username',
+                message: 'Your username (for credit tracking):',
+                default: config.socket.username || '',
+                validate: value => value.trim().length > 0 ? true : 'Please enter a valid username'
+            },
+            {
+                type: 'confirm',
+                name: 'enableCredits',
+                message: 'Enable credits tracking?',
+                default: config.credits.enabled
+            },
+            {
+                type: 'input',
                 name: 'adminKey',
                 message: 'Admin Key (leave empty to keep current):',
                 default: ''
@@ -519,6 +589,11 @@ program
         // Update configuration
         config.socket.url = answers.websocketUrl;
         config.monitoring.interval = parseInt(answers.checkInterval) * 1000;
+        config.credits.enabled = answers.enableCredits;
+        
+        if (answers.username) {
+            saveUserInfo(answers.username);
+        }
         
         if (answers.adminKey) {
             saveAdminKey(answers.adminKey);
@@ -635,6 +710,54 @@ program
         }
         
         process.exit(0);
+    });
+
+program
+    .command('credits')
+    .description('View your current credit balance')
+    .action(async () => {
+        displayHeader();
+        loadConfig();
+        loadUserInfo();
+        
+        if (!config.socket.username) {
+            console.log(chalk.yellow('No username configured. Please run \'configure\' first.'));
+            process.exit(1);
+        }
+        
+        console.log(chalk.cyan('\nConnecting to server to retrieve credit information...'));
+        
+        // Connect to server and check credits
+        socket = connectSocket();
+        
+        // Wait for connection
+        setTimeout(() => {
+            socket.emit('get-user-credits', {
+                username: config.socket.username
+            });
+            
+            // Handle response
+            socket.on('user-credits-response', (data) => {
+                console.log(chalk.green('\nCredit Information:'));
+                console.log(chalk.white(`Username: ${config.socket.username}`));
+                console.log(chalk.white(`Credits: ${data.credits || 0}`));
+                console.log(chalk.white(`Verifications: ${data.verifications || 0}`));
+                console.log(chalk.white(`Last Active: ${data.lastUpdated ? new Date(data.lastUpdated).toLocaleString() : 'Never'}`));
+                
+                console.log(chalk.cyan('\nLearn more about credits at: https://centural.websim.ai/credits.html'));
+                
+                // Disconnect and exit
+                socket.disconnect();
+                process.exit(0);
+            });
+            
+            // Timeout if no response
+            setTimeout(() => {
+                console.log(chalk.red('\nFailed to retrieve credit information: Timeout'));
+                socket.disconnect();
+                process.exit(1);
+            }, 5000);
+        }, 1000);
     });
 
 // If no arguments, show help
