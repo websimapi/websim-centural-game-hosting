@@ -1,0 +1,23 @@
+{
+  "name": "centural-server-monitor",
+  "version": "1.0.0",
+  "description": "Monitors game servers and reports status to Centural dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Centural Game Hosting",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^9.3.0",
+    "dotenv": "^16.0.0",
+    "figlet": "^1.5.2",
+    "inquirer": "^8.2.4",
+    "node-fetch": "^2.6.7",
+    "ping": "^0.4.2",
+    "socket.io-client": "^4.5.0",
+    "winston": "^3.7.2"
+  }
+}
